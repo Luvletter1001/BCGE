@@ -5,7 +5,410 @@ import cv2
 import numpy as np
 import torch
 
+def obb2poly_np_le90_points_18(obboxes):
+    """Convert oriented bounding boxes to polygons.
 
+    Args:
+        obbs (ndarray): [x_ctr,y_ctr,w,h,angle,score]
+
+    Returns:
+        polys (ndarray): [x0,y0,x1,y1,x2,y2,x3,y3,score]
+    """
+    # try:
+    # center, w, h, theta = torch.split(obboxes, (2, 3, 4), axis=-1)
+    center = obboxes[..., :2].reshape(-1, 2)
+    w = obboxes[..., 2].reshape(-1, 1)
+    h = obboxes[..., 3].reshape(-1, 1)
+    theta = obboxes[..., 4].reshape(-1, 1)
+    # except:  # noqa: E722
+    #     results = torch.tensor([0., 0., 0., 0., 0., 0., 0., 0., 0.]).cuda()
+    #     return results.reshape(1, -1)
+    Cos, Sin = torch.cos(theta), torch.sin(theta)
+    vector1 = torch.cat([w / 2 * Cos, w / 2 * Sin], axis=-1).reshape(-1, 2)
+    vector2 = torch.cat([-h / 2 * Sin, h / 2 * Cos], axis=-1).reshape(-1, 2)
+    point1 = center - (vector1 + vector2)
+    point2 = center + (vector1 - vector2)
+    point3 = center + (vector1 + vector2)
+    point4 = center - (vector1 - vector2)
+    point5 = (point1 + point2)/2
+    point6 = (point2 + point3)/2
+    point7 = (point3 + point4)/2
+    point8 = (point4 + point1)/2
+    polys = torch.cat([point1, point2, point3, point4,point5,point6,point7,point8,center], axis=-1)
+    # polys = get_best_begin_point(polys)
+    return polys
+
+def obb2poly_np_le90_points_8(obboxes):
+    """Convert oriented bounding boxes to polygons.
+
+    Args:
+        obbs (ndarray): [x_ctr,y_ctr,w,h,angle,score]
+
+    Returns:
+        polys (ndarray): [x0,y0,x1,y1,x2,y2,x3,y3,score]
+    """
+    # try:
+    # center, w, h, theta = torch.split(obboxes, (2, 3, 4), axis=-1)
+    center = obboxes[..., :2].reshape(-1, 2)
+    w = obboxes[..., 2].reshape(-1, 1)
+    h = obboxes[..., 3].reshape(-1, 1)
+    theta = obboxes[..., 4].reshape(-1, 1)
+    # except:  # noqa: E722
+    #     results = torch.tensor([0., 0., 0., 0., 0., 0., 0., 0., 0.]).cuda()
+    #     return results.reshape(1, -1)
+    Cos, Sin = torch.cos(theta), torch.sin(theta)
+    vector1 = torch.cat([w / 2 * Cos, w / 2 * Sin], axis=-1).reshape(-1, 2)
+    vector2 = torch.cat([-h / 2 * Sin, h / 2 * Cos], axis=-1).reshape(-1, 2)
+    point1 = center - (vector1 + vector2)
+    point2 = center + (vector1 - vector2)
+    point3 = center + (vector1 + vector2)
+    point4 = center - (vector1 - vector2)
+
+    polys = torch.cat([point1, point2, point3, point4], axis=-1)
+    # polys = get_best_begin_point(polys)
+    return polys
+
+def sigma_xy_wh_r_2_xy(xy_sigma,rois,version="oc"):
+    xy = xy_sigma[0]
+    sigma = xy_sigma[1]
+    # eigenvalues, eigenvectors = torch.eig(sigma, eigenvectors=True)
+    # R,S,R_inv = torch.svd(sigma)
+    # pw = (rois[:, 2]).unsqueeze(1)
+    # ph = (rois[:, 3]).unsqueeze(1)
+    gama1 = sigma[..., 0, 0].reshape(-1,1)
+    gama2 = sigma[..., 1, 1].reshape(-1,1)
+    gama3 = sigma[..., 0, 1].reshape(-1,1)
+    # pi025 = (torch.ones([gama1.shape[0]]).cuda()*math.pi*(1/4)).reshape(-1,1)
+    d_gama1_2 = (gama1-gama2)
+    d_gama1and2 = gama1+gama2
+    # e_7 = torch.tensor([1e-7]).cuda()
+    # d_gama1_2 = torch.where(d_gama1_2 == 0, e_7, d_gama1_2)
+    alpha=d_gama1_2/(gama3+1e-7)
+    T_tan=-0.5*(alpha-torch.sqrt(alpha*alpha+4))
+    # raw_cita = 0.5*(torch.arctan(2*gama3/d_gama1_2))
+    raw_cita=torch.arctan(T_tan)
+    # print(raw_cita.min(),raw_cita.max())
+    raw_cita = raw_cita.nan_to_num(0.0005).clamp(0.00005,1.572)
+    zero=torch.zeros_like(gama1)+1e-7
+    half_pi=torch.zeros_like(gama1)+1.565
+    # one=torch.zeros_like(gama1)+1e-2
+    raw_cita=torch.where(gama1<0.05 ,zero,raw_cita)
+    # print(gama1.min(),gama1.max())
+    change=(raw_cita<1e-5)*(gama1>1e-2)
+
+    raw_cita=torch.where(change,half_pi,raw_cita)
+
+    # print(raw_cita.isnan().any())
+    # raw_cita = torch.where(gama3 ==1.5708, cita0, raw_cita)    # raw_cita = norm_angle(raw_cita, version)
+
+    flag='sqr'
+    if flag == "sqr":
+        trans="new2"
+        if trans=="old":
+            a=d_gama1and2
+            b=(1*gama3)/(raw_cita.cos()*raw_cita.sin())
+            c=(1*d_gama1_2)/(raw_cita.cos()*raw_cita.cos()-raw_cita.sin()*raw_cita.sin())
+            # a = 8*gama3/torch.sin(2*raw_cita)
+            # b = 4*d_gama1and2
+
+            # ab = a+b
+            # ab=torch.where(ab<0,-2,1)
+            # ab_r = -a+b
+            # ab_r=torch.where(ab_r<0,-2,1)
+            raw_w =torch.sqrt(torch.abs(2*a+b+c))
+            raw_h =torch.sqrt(torch.abs((2*a-b-c)))
+            # complex_w = torch.where((a+b)<=0,-1.,1.)
+            # # complex_w = complex_w*raw_w
+            # complex_h = torch.where((-a+b)<=0,-1.,1.)
+        elif trans=="new1":
+            # a=d_gama1and2*d_gama1and2-d_gama1_2*d_gama1_2-4*gama3*gama3
+            a=gama1*gama2-gama3*gama3
+            b=d_gama1and2
+            # raw_cita=torch.where(change,half_pi,raw_cita)
+            # w_long=(d_gama1_2>0)*((raw_cita.cos()*raw_cita.cos()-raw_cita.sin()*raw_cita.sin())>0)
+            # squ=(gama3<zero)*((raw_cita.sin()*raw_cita.cos()).abs()>zero)*((b*b-4*a)<zero)
+            w_long_1=(d_gama1_2>0)*((raw_cita.cos()*raw_cita.cos()-raw_cita.sin()*raw_cita.sin())>0)
+            w_long_2= (d_gama1_2<0)*((raw_cita.cos()*raw_cita.cos()-raw_cita.sin()*raw_cita.sin())<0)
+            w_long=w_long_1+w_long_2
+            x=0.5*(b+(b*b-4*a).clamp(0).sqrt())
+            y=0.5*(b-(b*b-4*a).clamp(0).sqrt())
+            maxwh=torch.where(x>y,x,y)
+            minwh=torch.where(x<=y,x,y)
+
+            raw_w=torch.where(w_long,maxwh,minwh)
+            raw_h = torch.where(w_long,minwh,maxwh)
+            raw_w=raw_w.abs().sqrt()*2
+            raw_h=raw_h.abs().sqrt()*2
+        elif trans=="new2":
+            _shape = raw_cita.shape
+            r=raw_cita
+            cos_r = torch.cos(r)
+            sin_r = torch.sin(r)
+            R = torch.stack((cos_r, -sin_r, sin_r, cos_r), dim=-1).reshape(-1, 2, 2)
+            RT=R.permute(0, 2,1)
+            S= RT.bmm(sigma).bmm(R)
+
+            raw_w = S[..., 0, 0].reshape(-1,1)
+            raw_h = S[..., 1, 1].reshape(-1,1)
+            # print(S[..., 0, 1].reshape(-1,1))
+            raw_w=raw_w.abs().sqrt()*2
+            raw_h=raw_h.abs().sqrt()*2
+    elif flag=='single':
+
+        a = d_gama1and2
+
+        b = (d_gama1_2)/torch.cos(2*raw_cita)
+        c = (2*gama3)/torch.sin(2*raw_cita)
+        ab = a+b
+        ac = a+c
+        # raw_w = torch.abs(0.5*(a+b))+torch.abs(0.5*(a+c))
+        # raw_h = torch.abs( 0.5*(-a + b)) + torch.abs(0.5*(-a + c))
+        raw_w = torch.abs(0.5*(a+b))+torch.abs(0.5*(a+c)).clamp(min=1e-7,max=256)
+        raw_h = torch.abs( 0.5*(a-c)) + torch.abs(0.5*(a-b)).clamp(1e-7,max=256)
+        complex_w = torch.where((a+b)<=0,-1.,1.)
+        complex_h = torch.where((-a+b)<=0,-1.,1.)
+
+
+
+
+
+    # raw_w=torch.abs(2*gama1)
+    # raw_h=torch.abs(2*gama2)
+    # raw_w = torch.where(gama3==0,torch.abs(2*gama1),raw_w)
+    # raw_h = torch.where(gama3==0,torch.abs(2*gama2),raw_h)
+
+    # complex_h = complex_h*raw_h
+    # print(torch.all((a+b)>0),torch.all((-a+b)>0))
+    # raw_w = torch.sqrt(ab*0.5*(a+b))
+    # raw_h = torch.sqrt(ab_r*0.5*(-a+b))
+
+    # raw_w = torch.where(raw_cita!=math.pi*(1/4),raw_w, torch.sqrt(2*gama1+2*gama3))
+    # raw_h = torch.where(raw_cita!=math.pi*(1/4),raw_h, torch.sqrt(2*gama1-2*gama3))
+    # rev_5_ = torch.full_like(raw_w, 5)
+    # print(pw[torch.where(pw<0)])
+    # rev_w = torch.where(torch.isnan(rev_w), rev_5_, rev_w)
+    # rev_h = torch.where(torch.isnan(rev_h), rev_5_, rev_h)
+    rev_w = torch.nan_to_num(raw_w,1e-7)
+    rev_h = torch.nan_to_num(raw_h,1e-7)
+    # rev_w=torch.where(squ,maxwh,rev_w)
+    # rev_h=torch.where(squ,maxwh,rev_h)
+    # rev_w = torch.where(torch.isnan(raw_w), 0.7*pw, raw_w)
+    # rev_h = torch.where(torch.isnan(raw_h), 0.7*ph, raw_h)
+    # rev_w = torch.where(rev_w<0, pw, rev_w)
+    # rev_h = torch.where(rev_h<0, ph, rev_h)
+
+    # rev_w = torch.where(rev_w<0, rev_5_, rev_w)
+    # rev_h = torch.where(rev_h<0, rev_5_, rev_h)
+
+    raw_x=xy[:,0].reshape(-1,1)
+    raw_y = xy[:,1].reshape(-1,1)
+
+    # print(torch.any(rev_w<0),torch.any(rev_h<0))
+
+
+    # rev_w = torch.where(raw_w_0==5,raw_h_0,raw_w_0).reshape(-1,1)
+    # rev_h = torch.where(raw_h_0==5,raw_w_0,raw_h_0).reshape(-1,1)
+    wh = torch.cat((rev_w, rev_h), axis=1)
+    if version == 'le90' or version == 'le135':
+        rev_cita = torch.where(raw_cita < 0, raw_cita + 0.5 * math.pi, raw_cita - 0.5 * math.pi).reshape(-1, 1)
+        # wh = torch.nan_to_num(wh,nan=1e+01)
+        wh_sor, indices  = torch.sort(wh,descending=True)
+        cita_a_b = torch.cat((rev_cita,raw_cita),axis=1)
+        out_cita = torch.sum((cita_a_b * indices),dim=1).reshape(-1,1)
+        # out_com_w = torch.sum((complex_w * indices),dim=1).reshape(-1,1)
+        # out_com_w = torch.where(rev_w>rev_h,complex_w,complex_h)
+        # out_com_h = torch.sum((complex_h * indices),dim=1).reshape(-1,1)
+        # out_com_h = torch.where(rev_w > rev_h, complex_h, complex_w)
+
+
+
+        pre_out = torch.cat((raw_x,raw_y,wh_sor,out_cita),axis=1)
+    if version == 'oc':
+        # pos_cita = torch.where(raw_cita>0,1,0).reshape(-1,1)
+        # neg_cita = 1-pos_cita
+        # out_w=torch.where(raw_w > raw_h, raw_w, raw_h)
+        # out_h = torch.where(raw_w > raw_h, raw_h, raw_w)
+        # hw = torch.cat((rev_h, rev_w), axis=1)
+        # wh_sor = wh * pos_cita + neg_cita * hw
+        # out_cita = torch.where(raw_cita >0, raw_cita, raw_cita+0.5*math.pi).reshape(-1, 1)
+        # raw_cita=torch.where(change,half_pi,raw_cita)
+        # rev_w=torch.where(change,rev_h,rev_w)
+        # rev_h=torch.where(change,rev_w,rev_h)
+        # print(raw_cita.min(),raw_cita.max())
+        # print(rev_w.min(),rev_w.max())
+        # print(rev_h.min(),rev_h.max())
+        pre_out = torch.cat((raw_x, raw_y, rev_w,rev_h, raw_cita), axis=1)
+    if version == 'le135':
+        obb90=obb2poly_le90(pre_out)
+        pre_out=poly2obb(obb90, version='le135')
+    # print(torch.any(wh_sor<0))
+    # print(torch.all(pre_out[:,2]>=pre_out[:,3]))
+    # if torch.any(wh_sor<0):
+    #     print('pl')
+    # out_com_w = torch.where(rev_w > rev_h, complex_w, complex_h)
+    # # out_com_h = torch.sum((complex_h * indices),dim=1).reshape(-1,1)
+    # out_com_h = torch.where(rev_w > rev_h, complex_h, complex_w)
+    return pre_out
+
+
+def gaussian2bbox_s(gmm):
+    """Convert Gaussian distribution to polygons by SVD.
+
+    Args:
+        gmm (dict[str, torch.Tensor]): Dict of Gaussian distribution.
+
+    Returns:
+        torch.Tensor: Polygons.
+    """
+    # try:
+    #     from torch_batch_svd import svd
+    # except ImportError:
+    #     svd = None
+    L = 3
+    var = gmm[1]
+    mu = gmm[0]
+
+    # assert mu.size()[1:] == (1, 2)
+    # assert var.size()[1:] == (1, 2, 2)
+    T = mu.size()[0]
+    var = var.squeeze(1)
+    # if svd is None:
+    #     raise ImportError('Please install torch_batch_svd first.')
+    U, s, Vt = torch.svd(var)
+    x=mu[:,0].reshape(-1,1)
+    y=mu[:,1].reshape(-1,1)
+    w=s[:,0].reshape(-1,1)
+    h=s[:,1].reshape(-1,1)
+    w=torch.nan_to_num(w,5)
+    h=torch.nan_to_num(h,5)
+    cita=torch.arccos(U[:,0,0].sqrt()).reshape(-1,1)
+    # size_half = L * s.sqrt().unsqueeze(1).repeat(1, 4, 1)
+    # mu = mu.repeat(1, 4, 1)
+    #dx_dy = size_half * torch.tensor([[-1, 1], [1, 1], [1, -1], [-1, -1]], dtype=torch.float32,device=size_half.device)
+    # bboxes = (mu + dx_dy.matmul(Vt.transpose(1, 2))).reshape(T, 8)
+    bboxes=torch.stack((x,y,w*2,h*2,cita),dim=0)
+
+    return bboxes
+
+
+def sigma5_xy_wh_r_2_xy(xy_sigma,version):
+
+    raw_x = xy_sigma[:, 0::5]
+    raw_y = xy_sigma[:, 1::5]
+    gama1 = xy_sigma[:, 2::5]
+    gama2 = xy_sigma[:, 3::5]
+    gama3 = xy_sigma[:, 4::5]
+
+    # pi025 = (torch.ones([gama1.shape[0]]).cuda()*math.pi*(1/4)).reshape(-1,1)
+    d_gama1_2 = (gama1-gama2)
+    d_gama1and2 = gama1+gama2
+    e_7 = torch.tensor([1e-7]).cuda()
+    # d_gama1_2 = torch.where(d_gama1_2 == 0, e_7, d_gama1_2)
+    raw_cita = 0.5*(torch.arctan((2*gama3)/d_gama1_2))
+
+    a = 8*gama3/torch.sin(2*raw_cita)
+    b = 4*d_gama1and2
+    raw_w =torch.sqrt(0.5*(a+b))
+    raw_h = torch.sqrt(0.5*(-a+b))
+
+    # raw_w = torch.where(raw_cita!=math.pi*(1/4),raw_w, torch.sqrt(2*gama1+2*gama3))
+    # raw_h = torch.where(raw_cita!=math.pi*(1/4),raw_h, torch.sqrt(2*gama1-2*gama3))
+    # rev_5_ = torch.full_like(raw_w, 5)
+    # print(pw[torch.where(pw<0)])
+    # rev_w = torch.where(torch.isnan(rev_w), rev_5_, rev_w)
+    # rev_h = torch.where(torch.isnan(rev_h), rev_5_, rev_h)
+    rev_w = torch.nan_to_num(raw_w,5)
+    rev_h = torch.nan_to_num(raw_h,5)
+    # rev_w = torch.where(torch.isnan(raw_w), 0.7*pw, raw_w)
+    # rev_h = torch.where(torch.isnan(raw_h), 0.7*ph, raw_h)
+    # rev_w = torch.where(rev_w<0, pw, rev_w)
+    # rev_h = torch.where(rev_h<0, ph, rev_h)
+
+    # rev_w = torch.where(rev_w<0, rev_5_, rev_w)
+    # rev_h = torch.where(rev_h<0, rev_5_, rev_h)
+
+    # raw_x=xy[:,0].reshape(-1,1)
+    # raw_y = xy[:,1].reshape(-1,1)
+
+    # print(torch.any(rev_w<0),torch.any(rev_h<0))
+
+
+    # rev_w = torch.where(raw_w_0==5,raw_h_0,raw_w_0).reshape(-1,1)
+    # rev_h = torch.where(raw_h_0==5,raw_w_0,raw_h_0).reshape(-1,1)
+    wh = torch.cat((rev_w, rev_h), axis=1)
+    if version == 'le90':
+        rev_cita = torch.where(raw_cita < 0, raw_cita + 0.5 * math.pi, raw_cita - 0.5 * math.pi).reshape(-1, 1)
+        # wh = torch.nan_to_num(wh,nan=1e+01)
+        wh_sor, indices  = torch.sort(wh,descending=True)
+        cita_a_b = torch.cat((rev_cita,raw_cita),axis=1)
+        out_cita = torch.sum((cita_a_b * indices),dim=1).reshape(-1,1)
+
+
+
+        pre_out = torch.cat((raw_x,raw_y,wh_sor,out_cita),axis=1)
+    if version == 'oc':
+        # pos_cita = torch.where(rev_cita>0,1,0).reshape(-1,1)
+        # neg_cita = 1-pos_cita
+        # hw = torch.cat((rev_h, rev_w), axis=1)
+        # wh_sor = wh * pos_cita + neg_cita * hw
+        # out_cita = torch.where(rev_cita >0, rev_cita, rev_cita+0.5*math.pi).reshape(-1, 1)
+
+        pre_out = torch.cat((raw_x, raw_y, wh_sor, out_cita), axis=1)
+    # print(torch.any(wh_sor<0))
+    # print(torch.all(pre_out[:,2]>=pre_out[:,3]))
+
+    return pre_out
+
+def xy_wh_r_2_xy_sigm_sqr(xywhr):
+    """Convert oriented bounding box to 2-D Gaussian distribution.
+
+    Args:
+        xywhr (torch.Tensor): rbboxes with shape (N, 5).
+
+    Returns:
+        xy (torch.Tensor): center point of 2-D Gaussian distribution
+            with shape (N, 2).
+        sigma (torch.Tensor): covariance matrix of 2-D Gaussian distribution
+            with shape (N, 2, 2).
+    """
+    _shape = xywhr.shape
+    assert _shape[-1] == 5
+    xy = xywhr[..., :2]
+    wh = xywhr[..., 2:4].clamp(min=1e-7, max=1e7).reshape(-1, 2)
+    r = xywhr[..., 4]
+    cos_r = torch.cos(r)
+    sin_r = torch.sin(r)
+    R = torch.stack((cos_r, -sin_r, sin_r, cos_r), dim=-1).reshape(-1, 2, 2)
+    S = 0.5 * torch.diag_embed(wh)
+
+    sigma = R.bmm(S.square()).bmm(R.permute(0, 2,1)).reshape(_shape[:-1] + (2, 2))
+
+    return xy, sigma
+def xy_wh_r_2_xy_sigma(xywhr):
+    """Convert oriented bounding box to 2-D Gaussian distribution.
+
+    Args:
+        xywhr (torch.Tensor): rbboxes with shape (N, 5).
+
+    Returns:
+        xy (torch.Tensor): center point of 2-D Gaussian distribution
+            with shape (N, 2).
+        sigma (torch.Tensor): covariance matrix of 2-D Gaussian distribution
+            with shape (N, 2, 2).
+    """
+    _shape = xywhr.shape
+    assert _shape[-1] == 5
+    xy = xywhr[..., :2]
+    wh = xywhr[..., 2:4].clamp(min=1e-7, max=1e7).reshape(-1, 2)
+    r = xywhr[..., 4]
+    cos_r = torch.cos(r)
+    sin_r = torch.sin(r)
+    R = torch.stack((cos_r, -sin_r, sin_r, cos_r), dim=-1).reshape(-1, 2, 2)
+    S = 0.5 * torch.diag_embed(wh)
+
+    sigma = R.bmm(S).bmm(R.permute(0, 2,1)).reshape(_shape[:-1] + (2, 2))
+
+    return xy, sigma
 def bbox_flip(bboxes, img_shape, direction='horizontal'):
     """Flip bboxes horizontally or vertically.
 
@@ -427,11 +830,11 @@ def obb2poly_oc(rboxes):
     Returns:
         polys (torch.Tensor): [x0,y0,x1,y1,x2,y2,x3,y3]
     """
-    x = rboxes[:, 0]
-    y = rboxes[:, 1]
-    w = rboxes[:, 2]
-    h = rboxes[:, 3]
-    a = rboxes[:, 4]
+    x = rboxes[..., 0]
+    y = rboxes[..., 1]
+    w = rboxes[..., 2]
+    h = rboxes[..., 3]
+    a = rboxes[..., 4]
     cosa = torch.cos(a)
     sina = torch.sin(a)
     wx, wy = w / 2 * cosa, w / 2 * sina
@@ -508,17 +911,17 @@ def obb2hbb_oc(rbboxes):
     Returns:
         hbbs (torch.Tensor): [x_ctr,y_ctr,w,h,pi/2]
     """
-    w = rbboxes[:, 2::5]
-    h = rbboxes[:, 3::5]
-    a = rbboxes[:, 4::5]
+    w = rbboxes[..., 2::5]
+    h = rbboxes[..., 3::5]
+    a = rbboxes[..., 4::5]
     cosa = torch.cos(a)
     sina = torch.sin(a)
     hbbox_w = cosa * w + sina * h
     hbbox_h = sina * w + cosa * h
     hbboxes = rbboxes.clone().detach()
-    hbboxes[:, 2::5] = hbbox_h
-    hbboxes[:, 3::5] = hbbox_w
-    hbboxes[:, 4::5] = np.pi / 2
+    hbboxes[..., 2::5] = hbbox_h
+    hbboxes[..., 3::5] = hbbox_w
+    hbboxes[..., 4::5] = np.pi / 2
     return hbboxes
 
 
@@ -878,6 +1281,9 @@ def dist_torch(point1, point2):
         distance (torch.Tensor): shape(n, 1).
     """
     return torch.norm(point1 - point2, dim=-1)
+
+
+
 
 
 def gaussian2bbox(gmm):
